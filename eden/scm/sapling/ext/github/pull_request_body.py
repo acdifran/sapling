@@ -25,6 +25,7 @@ def create_pull_request_title_and_body(
     reviewstack: bool = True,
     review_url_template: str = DEFAULT_REVIEW_URL_TEMPLATE,
     review_tool_name: str = DEFAULT_REVIEW_TOOL_NAME,
+    stack_list: bool = True,
 ) -> Tuple[str, str]:
     r"""Returns (title, body) for the pull request.
 
@@ -155,6 +156,18 @@ def create_pull_request_title_and_body(
      ...
     sapling.error.Abort: invalid github.pull-request-review-url-template 'https://review.example.com/{bogus}': 'bogus'
 
+    Disable the stack list entirely (used for the native "stacked" workflow,
+    where GitHub renders the stack in the pull request UI itself). Note that
+    this also suppresses the review link:
+    >>> title, body = create_pull_request_title_and_body(commit_msg, pr_numbers_and_num_commits,
+    ...     pr_numbers_index, contributor_repo, stack_list=False)
+    >>> print(title)
+    The original commit message.
+    >>> print(body)
+    Second line of message.
+    <BLANKLINE>
+    <BLANKLINE>
+
     Single commit stack:
     >>> title, body = create_pull_request_title_and_body("Foo", [(1, 1)], 0, contributor_repo)
     >>> print(title)
@@ -177,7 +190,7 @@ def create_pull_request_title_and_body(
 
     body = _strip_stack_information(body)
     extra = []
-    if len(pr_numbers_and_num_commits) > 1:
+    if stack_list and len(pr_numbers_and_num_commits) > 1:
         if reviewstack:
             # Pull requests live in the upstream repository, so - like `owner`
             # and `name` above (see get_upstream_owner_and_name()) - the

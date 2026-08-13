@@ -38,7 +38,11 @@ def setup_mock_github_server(ui) -> MockGitHubServer:
     ]
 
     # Both "single" and "stacked" chain each PR's base to the PR below it.
-    chained = ui.config("github", "pr-workflow") in ("single", "stacked")
+    workflow = ui.config("github", "pr-workflow")
+    chained = workflow in ("single", "stacked")
+    # The "stacked" workflow omits the stack list footer from PR bodies
+    # because GitHub renders the stack natively.
+    stacked = workflow == "stacked"
 
     for idx, (num, msg) in enumerate(prs):
         title, body = title_and_body(msg)
@@ -63,7 +67,7 @@ def setup_mock_github_server(ui) -> MockGitHubServer:
             num,
             msg,
             base=base,
-            stack_pr_ids=[pr[0] for pr in prs],
+            stack_pr_ids=None if stacked else [pr[0] for pr in prs],
             review_url=_format_review_url(
                 DEFAULT_REVIEW_URL_TEMPLATE,
                 owner=OWNER,

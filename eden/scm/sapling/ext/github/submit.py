@@ -397,6 +397,10 @@ async def rewrite_pull_request_body(
         reviewstack=ui.configbool("github", "pull-request-include-reviewstack"),
         review_url_template=review_url_template,
         review_tool_name=review_tool_name,
+        # For the native "stacked" workflow, GitHub renders the stack in the
+        # pull request UI itself, so the footer stack list (and ReviewStack
+        # link) would be redundant.
+        stack_list=workflow != SubmitWorkflow.STACKED,
     )
 
     if pr.state != PullRequestState.OPEN:
