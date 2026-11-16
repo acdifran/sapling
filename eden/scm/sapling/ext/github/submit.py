@@ -39,7 +39,7 @@ def submit(ui, repo, *args, **opts) -> int:
     github_repo = check_github_repo(repo)
     is_draft = opts.get("draft")
     is_open = opts.get("open")
-    is_restack = opts.get("restack")
+    is_restack = opts.get("restack") or ui.configbool("github", "pr-submit-restack")
     return asyncio.run(
         update_commits_in_stack(
             ui,

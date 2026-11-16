@@ -142,8 +142,9 @@ def submit_cmd(ui, repo, *args, **opts):
       GitHub renders the stack in the pull request UI and can merge it
       from the bottom up. If the stack on GitHub has diverged from your
       local stack (e.g., commits were reordered or removed), it is not
-      modified unless ``--restack`` is passed, which dissolves the stack
-      on GitHub and recreates it to match your local stack. Note that
+      modified unless ``--restack`` is passed (or ``github.pr-submit-restack``
+      is set), which dissolves the stack on GitHub and recreates it to match
+      your local stack. Note that
       GitHub does not support stacks across forks.
 
     Returns 0 on success.
