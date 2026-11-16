@@ -377,6 +377,7 @@ async def update_commits_in_stack(
     # auto-close the PR as "merged".
     #
     # See https://github.com/facebook/sapling/issues/1275
+    deferred_base_updates = []
     if workflow.uses_chained_bases():
         existing_prs = [
             p for p in partitions if p[0].pr and p[0].pr.state == PullRequestState.OPEN
@@ -409,22 +410,23 @@ async def update_commits_in_stack(
                     if below_pr and below_pr.state != PullRequestState.OPEN:
                         continue
                     base = none_throws(below_head.head_branch_name)
+                    if not below_pr:
+                        # The branch of a pull request that is about to be
+                        # created doesn't exist on GitHub until the push
+                        # below, and GitHub rejects a base that doesn't exist.
+                        deferred_base_updates.append((pr, base))
+                        base = None
                     break
-                result = await gh_submit.update_pull_request(
-                    repository.hostname, pr.node_id, pr.title, pr.body, base
-                )
-                if result.is_err():
-                    ui.status_err(
-                        _("warning, updating base for #%d may not have succeeded: %s\n")
-                        % (pr.number, result.unwrap_err())
-                    )
-                else:
-                    ui.status_err(_("updated base for %s\n") % pr.url)
+                if base is not None:
+                    await _update_base(ui, repository, pr, base)
 
     gitdir = get_gitdir()
     git_push_args = ["push", "--force", origin] + refs_to_update
     ui.status_err(_("pushing %d to %s\n") % (len(refs_to_update), origin))
     run_git_command(git_push_args, gitdir)
+
+    for pr, base in deferred_base_updates:
+        await _update_base(ui, none_throws(repository), pr, base)
 
     if params.pull_requests_to_create:
         if not repository:
@@ -495,6 +497,19 @@ async def update_commits_in_stack(
             webbrowser.open(url)
 
     return 0
+
+
+async def _update_base(ui, repository: Repository, pr, base: str) -> None:
+    result = await gh_submit.update_pull_request(
+        repository.hostname, pr.node_id, pr.title, pr.body, base
+    )
+    if result.is_err():
+        ui.status_err(
+            _("warning, updating base for #%d may not have succeeded: %s\n")
+            % (pr.number, result.unwrap_err())
+        )
+    else:
+        ui.status_err(_("updated base for %s\n") % pr.url)
 
 
 def local_open_pr_numbers(partitions: List[List[CommitData]]) -> List[int]:
