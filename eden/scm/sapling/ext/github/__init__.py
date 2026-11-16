@@ -144,8 +144,10 @@ def submit_cmd(ui, repo, *args, **opts):
       local stack (e.g., commits were reordered or removed), it is not
       modified unless ``--restack`` is passed (or ``github.pr-submit-restack``
       is set), which dissolves the stack on GitHub and recreates it to match
-      your local stack. Note that
-      GitHub does not support stacks across forks.
+      your local stack. Submitting from any commit in the stack submits
+      the whole stack, up to its top, since rewriting a commit rewrites
+      every commit above it. Note that GitHub does not support stacks
+      across forks.
 
     Returns 0 on success.
     """

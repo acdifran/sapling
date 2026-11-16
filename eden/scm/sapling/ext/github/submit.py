@@ -13,7 +13,7 @@ from typing import Any, List, Optional, Tuple
 from sapling import error, formatter, git, hintutil, templatekw
 from sapling.context import changectx
 from sapling.i18n import _
-from sapling.node import hex, nullid
+from sapling.node import hex, nullid, short
 from sapling.result import Result
 
 from . import gh_submit, github_repo_util
@@ -154,6 +154,39 @@ class PullRequestParams:
     number: int
 
 
+def _stack_top(ui, repo) -> Optional[bytes]:
+    """Returns the top of the stack containing the working copy parent when it
+    is above it, so that a submit from the middle of a stack covers the whole
+    stack.
+
+    In the stacked workflow, amending a commit rewrites every commit above it,
+    and a pull request whose base branch was rewritten no longer has a linear
+    history on GitHub until it is pushed too. Submitting only up to the working
+    copy would leave those pull requests stale, so the whole stack is submitted
+    regardless of which commit in it is checked out.
+    """
+    if not repo.revs("draft() & ."):
+        return None
+    heads = list(repo.nodes("heads(draft() & descendants(.))"))
+    if len(heads) > 1:
+        raise error.Abort(
+            _(
+                "the stack branches above the current commit (%d heads); "
+                "check out the top of the branch to submit"
+            )
+            % len(heads)
+        )
+    top = heads[0]
+    if top == repo["."].node():
+        return None
+    ctx = repo[top]
+    ui.status(
+        _("submitting the whole stack, up to %s (%s)\n")
+        % (short(top), ctx.description().split("\n", 1)[0])
+    )
+    return top
+
+
 async def get_partitions(ui, repo, store, filter) -> List[List[CommitData]]:
     commits_to_process = await asyncio.gather(
         *[derive_commit_data(node, repo, store) for node in repo.nodes(filter)]
@@ -193,7 +226,12 @@ async def update_commits_in_stack(
 
     workflow = SubmitWorkflow.from_config(ui)
 
-    partitions = await get_partitions(ui, repo, store, "sort(. %% public(), -rev)")
+    top = _stack_top(ui, repo) if workflow == SubmitWorkflow.STACKED else None
+    if top is None:
+        stack_filter = "sort(. %% public(), -rev)"
+    else:
+        stack_filter = "sort(%s %%%% public(), -rev)" % hex(top)
+    partitions = await get_partitions(ui, repo, store, stack_filter)
     if not partitions:
         ui.status_err(_("no commits to submit\n"))
         return 0
