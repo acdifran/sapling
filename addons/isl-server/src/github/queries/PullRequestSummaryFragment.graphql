@@ -1,0 +1,36 @@
+fragment PullRequestSummary on PullRequest {
+  __typename
+  number
+  title
+  body
+  state
+  isDraft
+  url
+  reviewDecision
+  comments {
+    totalCount
+  }
+  baseRef {
+    target {
+      oid
+    }
+    name
+  }
+  headRef {
+    target {
+      oid
+    }
+    name
+  }
+  headRefName
+  commits(last: 100) {
+    nodes {
+      commit {
+        oid
+        statusCheckRollup {
+          state
+        }
+      }
+    }
+  }
+}

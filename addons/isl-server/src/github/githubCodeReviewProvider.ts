@@ -23,6 +23,7 @@ import type {
   PullRequestCommentsQueryVariables,
   PullRequestReviewComment,
   PullRequestReviewDecision,
+  PullRequestSummary as PullRequestSummaryData,
   ReactionContent,
   YourPullRequestsQueryData,
   YourPullRequestsQueryVariables,
@@ -31,12 +32,12 @@ import type {
 } from './generated/graphql';
 
 import {TypedEventEmitter} from 'shared/TypedEventEmitter';
-import {debounce} from 'shared/debounce';
 import {notEmpty} from 'shared/utils';
 import {
   MergeQueueSupportQuery,
   PullRequestCommentsQuery,
   PullRequestState,
+  PullRequestSummary,
   StatusState,
   YourPullRequestsQuery,
   YourPullRequestsWithoutMergeQueueQuery,
@@ -69,6 +70,13 @@ export type GitHubDiffSummary = {
 };
 
 const DEFAULT_GH_FETCH_TIMEOUT = 60_000; // 1 minute
+const DIFF_SUMMARIES_FETCH_COOLDOWN = 2_000;
+/** Bounds the aliased by-number query; anything beyond waits for the next fetch. */
+const MAX_PRS_TO_FETCH_BY_NUMBER = 50;
+
+type SummaryFields = Omit<PullRequestSummaryData, '__typename'> & {
+  mergeQueueEntry?: {estimatedTimeToMerge?: number | null} | null;
+};
 
 type GitHubCodeReviewSystem = CodeReviewSystem & {type: 'github'};
 export class GitHubCodeReviewProvider implements CodeReviewProvider {
@@ -137,61 +145,108 @@ export class GitHubCodeReviewProvider implements CodeReviewProvider {
     }
   }
 
-  triggerDiffSummariesFetch = debounce(
-    async () => {
-      try {
-        const hasMergeQueueSupport = await this.detectMergeQueueSupport();
-        this.logger.info('fetching github PR summaries');
-        const allSummaries = await this.fetchYourPullRequestsGraphQL(hasMergeQueueSupport);
-        if (allSummaries?.search.nodes == null) {
-          this.diffSummaries.emit('data', new Map());
-          return;
-        }
+  private fetchCooldown: ReturnType<typeof setTimeout> | undefined;
+  private queuedFetch: Array<DiffId> | undefined;
 
-        const map = new Map<DiffId, GitHubDiffSummary>();
-        for (const summary of allSummaries.search.nodes) {
-          if (summary != null && summary.__typename === 'PullRequest') {
-            const id = String(summary.number);
-            const commitMessage = summary.body.slice(summary.title.length + 1);
-            map.set(id, {
-              type: 'github',
-              title: summary.title,
-              commitMessage,
-              // For some reason, `isDraft` is a separate boolean and not a state,
-              // but we generally treat it as its own state in the UI.
-              state:
-                summary.isDraft && summary.state === PullRequestState.Open
-                  ? 'DRAFT'
-                  : summary.mergeQueueEntry != null
-                    ? 'MERGE_QUEUED'
-                    : summary.state,
-              number: id,
-              url: summary.url,
-              commentCount: summary.comments.totalCount,
-              anyUnresolvedComments: false,
-              signalSummary: githubStatusRollupStateToCIStatus(
-                summary.commits.nodes?.[0]?.commit.statusCheckRollup?.state,
-              ),
-              reviewDecision: summary.reviewDecision ?? undefined,
-              base: summary.baseRef?.target?.oid,
-              head: summary.headRef?.target?.oid,
-              // Prefer headRefName: it persists even after the branch is deleted
-              // (e.g. once the PR is merged), whereas headRef becomes null.
-              branchName: summary.headRefName ?? summary.headRef?.name,
-            });
-          }
-        }
-        this.logger.info(`fetched ${map.size} github PR summaries`);
-        this.diffSummaries.emit('data', map);
-      } catch (error) {
-        this.logger.info('error fetching github PR summaries: ', error);
-        this.diffSummaries.emit('error', error as Error);
+  /**
+   * Fetches right away, then at most once per cooldown. A call during the cooldown runs when it
+   * ends instead of being dropped: the call that carries a just-submitted PR's number often lands
+   * right after another fetch, and dropping it would leave that PR without a summary until the
+   * next refresh.
+   */
+  triggerDiffSummariesFetch = Object.assign(
+    (diffs: Array<DiffId>) => {
+      if (this.fetchCooldown != null) {
+        this.queuedFetch = diffs;
+        return;
       }
+      void this.fetchDiffSummaries(diffs);
+      this.fetchCooldown = setTimeout(() => {
+        this.fetchCooldown = undefined;
+        const queued = this.queuedFetch;
+        this.queuedFetch = undefined;
+        if (queued != null) {
+          this.triggerDiffSummariesFetch(queued);
+        }
+      }, DIFF_SUMMARIES_FETCH_COOLDOWN);
     },
-    2000,
-    undefined,
-    /* leading */ true,
+    {
+      dispose: () => {
+        clearTimeout(this.fetchCooldown);
+        this.fetchCooldown = undefined;
+        this.queuedFetch = undefined;
+      },
+    },
   );
+
+  private async fetchDiffSummaries(diffs: Array<DiffId>) {
+    try {
+      const hasMergeQueueSupport = await this.detectMergeQueueSupport();
+      this.logger.info('fetching github PR summaries');
+      const allSummaries = await this.fetchYourPullRequestsGraphQL(hasMergeQueueSupport);
+
+      const map = new Map<DiffId, GitHubDiffSummary>();
+      for (const summary of allSummaries?.search.nodes ?? []) {
+        if (summary != null && summary.__typename === 'PullRequest') {
+          map.set(String(summary.number), toDiffSummary(summary));
+        }
+      }
+      // GitHub's search index lags behind newly created pull requests, so a PR that was just
+      // submitted is often missing from the search above. Fetch those directly.
+      const missing = diffs.filter(id => /^\d+$/.test(id) && !map.has(id));
+      for (const summary of await this.fetchPullRequestsByNumber(missing)) {
+        map.set(String(summary.number), toDiffSummary(summary));
+      }
+      this.logger.info(`fetched ${map.size} github PR summaries`);
+      this.diffSummaries.emit('data', map);
+    } catch (error) {
+      this.logger.info('error fetching github PR summaries: ', error);
+      this.diffSummaries.emit('error', error as Error);
+    }
+  }
+
+  private async fetchPullRequestsByNumber(
+    numbers: Array<DiffId>,
+  ): Promise<Array<PullRequestSummaryData>> {
+    const wanted = numbers.slice(0, MAX_PRS_TO_FETCH_BY_NUMBER);
+    if (wanted.length === 0) {
+      return [];
+    }
+    try {
+      return await this.queryPullRequestsByNumber(wanted);
+    } catch (error) {
+      if (wanted.length === 1) {
+        this.logger.info('error fetching github PR by number: ', error);
+        return [];
+      }
+      // Any number that isn't a pull request (e.g. a deleted one) errors the whole aliased query,
+      // so fall back to one query each and keep the ones that resolve.
+      const results = await Promise.allSettled(
+        wanted.map(n => this.queryPullRequestsByNumber([n])),
+      );
+      return results.flatMap(result => (result.status === 'fulfilled' ? result.value : []));
+    }
+  }
+
+  private async queryPullRequestsByNumber(
+    numbers: Array<DiffId>,
+  ): Promise<Array<PullRequestSummaryData>> {
+    // One aliased field per pull request, so any number of them costs a single request.
+    const fields = numbers
+      .map(n => `pr${n}: pullRequest(number: ${n}) { ...PullRequestSummary }`)
+      .join('\n');
+    const query = `query PullRequestsByNumberQuery($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    ${fields}
+  }
+}
+${PullRequestSummary}`;
+    const data = await this.query<
+      {repository?: Record<string, PullRequestSummaryData | null> | null},
+      {owner: string; name: string}
+    >(query, {owner: this.codeReviewSystem.owner, name: this.codeReviewSystem.repo});
+    return Object.values(data?.repository ?? {}).filter(notEmpty);
+  }
 
   public async fetchComments(diffId: string): Promise<DiffComment[]> {
     const response = await this.query<
@@ -292,6 +347,36 @@ export class GitHubCodeReviewProvider implements CodeReviewProvider {
     }
     return url;
   }
+}
+
+function toDiffSummary(summary: SummaryFields): GitHubDiffSummary {
+  const id = String(summary.number);
+  return {
+    type: 'github',
+    title: summary.title,
+    commitMessage: summary.body.slice(summary.title.length + 1),
+    // For some reason, `isDraft` is a separate boolean and not a state,
+    // but we generally treat it as its own state in the UI.
+    state:
+      summary.isDraft && summary.state === PullRequestState.Open
+        ? 'DRAFT'
+        : summary.mergeQueueEntry != null
+          ? 'MERGE_QUEUED'
+          : summary.state,
+    number: id,
+    url: summary.url,
+    commentCount: summary.comments.totalCount,
+    anyUnresolvedComments: false,
+    signalSummary: githubStatusRollupStateToCIStatus(
+      summary.commits.nodes?.[0]?.commit.statusCheckRollup?.state,
+    ),
+    reviewDecision: summary.reviewDecision ?? undefined,
+    base: summary.baseRef?.target?.oid,
+    head: summary.headRef?.target?.oid,
+    // Prefer headRefName: it persists even after the branch is deleted
+    // (e.g. once the PR is merged), whereas headRef becomes null.
+    branchName: summary.headRefName ?? summary.headRef?.name,
+  };
 }
 
 function githubStatusRollupStateToCIStatus(state: StatusState | undefined): DiffSignalSummary {

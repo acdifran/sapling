@@ -29502,6 +29502,8 @@ export type PullRequestCommentsQueryVariables = Exact<{
 
 export type PullRequestCommentsQueryData = { __typename?: 'Query', resource?: { __typename: 'Bot' } | { __typename: 'CheckRun' } | { __typename: 'ClosedEvent' } | { __typename: 'Commit' } | { __typename: 'ConvertToDraftEvent' } | { __typename: 'CrossReferencedEvent' } | { __typename: 'Gist' } | { __typename: 'Issue' } | { __typename: 'Mannequin' } | { __typename: 'MergedEvent' } | { __typename: 'Milestone' } | { __typename: 'Organization' } | { __typename: 'PullRequest', comments: { __typename?: 'IssueCommentConnection', totalCount: number, nodes?: Array<{ __typename?: 'IssueComment', bodyHTML: string, createdAt: string, author?: { __typename?: 'Bot', login: string, avatarUrl: string } | { __typename?: 'EnterpriseUserAccount', login: string, avatarUrl: string } | { __typename?: 'Mannequin', login: string, avatarUrl: string } | { __typename?: 'Organization', login: string, avatarUrl: string } | { __typename?: 'User', login: string, avatarUrl: string } | null, reactions: { __typename?: 'ReactionConnection', nodes?: Array<{ __typename?: 'Reaction', content: ReactionContent, user?: { __typename?: 'User', login: string } | null } | null> | null } } | null> | null }, reviews?: { __typename?: 'PullRequestReviewConnection', nodes?: Array<{ __typename?: 'PullRequestReview', comments: { __typename?: 'PullRequestReviewCommentConnection', nodes?: Array<{ __typename?: 'PullRequestReviewComment', line?: number | null, path: string, bodyHTML: string, createdAt: string, author?: { __typename?: 'Bot', login: string, avatarUrl: string } | { __typename?: 'EnterpriseUserAccount', login: string, avatarUrl: string } | { __typename?: 'Mannequin', login: string, avatarUrl: string } | { __typename?: 'Organization', login: string, avatarUrl: string } | { __typename?: 'User', login: string, avatarUrl: string } | null, reactions: { __typename?: 'ReactionConnection', nodes?: Array<{ __typename?: 'Reaction', content: ReactionContent, user?: { __typename?: 'User', login: string } | null } | null> | null } } | null> | null } } | null> | null } | null } | { __typename: 'PullRequestCommit' } | { __typename: 'ReadyForReviewEvent' } | { __typename: 'Release' } | { __typename: 'Repository' } | { __typename: 'RepositoryTopic' } | { __typename: 'ReviewDismissedEvent' } | { __typename: 'TeamDiscussion' } | { __typename: 'TeamDiscussionComment' } | { __typename: 'User' } | { __typename: 'Workflow' } | { __typename: 'WorkflowRun' } | { __typename: 'WorkflowRunFile' } | null };
 
+export type PullRequestSummary = { __typename: 'PullRequest', number: number, title: string, body: string, state: PullRequestState, isDraft: boolean, url: string, reviewDecision?: PullRequestReviewDecision | null, headRefName: string, comments: { __typename?: 'IssueCommentConnection', totalCount: number }, baseRef?: { __typename?: 'Ref', name: string, target?: { __typename?: 'Blob', oid: string } | { __typename?: 'Commit', oid: string } | { __typename?: 'Tag', oid: string } | { __typename?: 'Tree', oid: string } | null } | null, headRef?: { __typename?: 'Ref', name: string, target?: { __typename?: 'Blob', oid: string } | { __typename?: 'Commit', oid: string } | { __typename?: 'Tag', oid: string } | { __typename?: 'Tree', oid: string } | null } | null, commits: { __typename?: 'PullRequestCommitConnection', nodes?: Array<{ __typename?: 'PullRequestCommit', commit: { __typename?: 'Commit', oid: string, statusCheckRollup?: { __typename?: 'StatusCheckRollup', state: StatusState } | null } } | null> | null } };
+
 export type YourPullRequestsQueryVariables = Exact<{
   searchQuery: Scalars['String'];
   numToFetch: Scalars['Int'];
@@ -29535,6 +29537,44 @@ export const ReactionParts = `
       content
       user {
         login
+      }
+    }
+  }
+}
+    `;
+export const PullRequestSummary = `
+    fragment PullRequestSummary on PullRequest {
+  __typename
+  number
+  title
+  body
+  state
+  isDraft
+  url
+  reviewDecision
+  comments {
+    totalCount
+  }
+  baseRef {
+    target {
+      oid
+    }
+    name
+  }
+  headRef {
+    target {
+      oid
+    }
+    name
+  }
+  headRefName
+  commits(last: 100) {
+    nodes {
+      commit {
+        oid
+        statusCheckRollup {
+          state
+        }
       }
     }
   }
