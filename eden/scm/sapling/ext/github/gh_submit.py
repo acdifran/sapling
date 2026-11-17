@@ -182,7 +182,7 @@ repository.
 
 
 async def guess_next_pull_request_number(
-    hostname: str, owner: str, name: str
+    hostname: str, owner: str, name: str, include_stacks: bool = False
 ) -> Result[int, str]:
     """Returns our best guess as to the number that will be assigned to the next
     pull request for the specified repo. It is a "guess" because it is based
@@ -193,6 +193,9 @@ async def guess_next_pull_request_number(
       next number would be one more than that.
     - If an issue/pull request is created between the time this function is
       called and the pull request is created, the guess will also be wrong.
+    - Native GitHub stacks draw from the same sequence, so with
+      `include_stacks` the newest stack's number is considered too (a stack
+      that was since dissolved is not listed, and can still be missed).
 
     Note that the only reason we bother to do this is because, at least at the
     time of this writing, we cannot rename  the branch used for the head of a
@@ -230,7 +233,17 @@ async def guess_next_pull_request_number(
         return nodes[0]["number"] if nodes else 0
 
     values = [get_value(field) for field in ["issues", "pullRequests"]]
-    next_number = max(*values) + 1
+    if include_stacks:
+        # Best effort: without the stacks, the guess is only off by one.
+        stacks = await gh_cli.make_request(
+            {},
+            hostname=hostname,
+            endpoint=f"repos/{owner}/{name}/stacks?per_page=1",
+            headers=_STACKS_API_HEADERS,
+        )
+        if stacks.is_ok() and stacks.unwrap():
+            values.append(stacks.unwrap()[0]["number"])
+    next_number = max(values) + 1
     return Ok(next_number)
 
 

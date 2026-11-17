@@ -909,7 +909,12 @@ async def create_serial_strategy_params(
                 )
                 upstream_owner, upstream_name = repository.get_upstream_owner_and_name()
                 result = await gh_submit.guess_next_pull_request_number(
-                    github_repo.hostname, upstream_owner, upstream_name
+                    github_repo.hostname,
+                    upstream_owner,
+                    upstream_name,
+                    include_stacks=(
+                        SubmitWorkflow.from_config(ui) == SubmitWorkflow.STACKED
+                    ),
                 )
                 if result.is_err():
                     raise error.Abort(
